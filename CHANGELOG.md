@@ -383,6 +383,16 @@ discussion and diff. New entries must include that link; see
 
 ### Changed
 
+- `tools/pack/verify_archive.py --manifest` now checks the facts the manifest states about
+  the archive, and not only its archive hash and pack digest. The file name, the size, the
+  entry count, the uncompressed bytes, the version in the file name, the pack name, the
+  manifest version, and the protocols and the registry version of the archived
+  `registry.json` are compared with the archive itself; every difference is reported, with
+  the field, the value the manifest states and the value the archive gives, and the tool
+  exits 1. The entries and the uncompressed bytes are counted by the code that writes the
+  manifest, so the two tools cannot disagree about them. `revision` and
+  `compatibleEngines` are not compared: they cannot be derived from the archive. Closes
+  [issue #416](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/416).
 
 - `tools/validate/validate.py` and `schemas/fixture-v1.schema.json` now
   reject a soroban `[expect]` table containing a key other than `kind` or

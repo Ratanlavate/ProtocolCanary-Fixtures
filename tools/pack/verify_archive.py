@@ -15,7 +15,13 @@ stopping at the first failure:
 4. the pack digest recomputed over the extracted files equals the registry's
    ``packDigest`` (and the manifest's, when given), and the registry equals the
    one generated from the extracted tree;
-5. every extracted fixture passes ``tools/validate/validate.py``.
+5. every extracted fixture passes ``tools/validate/validate.py``;
+6. when a manifest is given, the facts it states about the archive match the
+   archive: its file name, its size, its entry count, its uncompressed bytes,
+   the version in its name, the pack name, the manifest version, and the
+   protocols and the registry version of the archived ``registry.json``. Every
+   difference is reported, with the field, the value the manifest states and
+   the value the archive gives.
 
 The temporary directory is always removed, on success and on failure.
 
@@ -76,6 +82,7 @@ def _load(name: str, relative: str):
 generate = _load("registry_generate", "tools/registry/generate.py")
 validator = _load("fixture_validate", "tools/validate/validate.py")
 portable_names = _load("canary_portable_names", "tools/validate/portable_names.py")
+release_manifest = _load("release_manifest", "tools/release/manifest.py")
 
 
 class ArchiveError(Exception):
@@ -280,11 +287,13 @@ def verify_archive(
         return verify_extracted(root, expected_digest)
 
 
-def _manifest_expectations(path: Path) -> tuple[str, str]:
-    """Read the archive hash and the pack digest from a release manifest.
+def _manifest_expectations(path: Path) -> tuple[str, str, dict]:
+    """Read the archive hash, the pack digest and the document of a manifest.
 
     Every problem with the manifest is unusable input: the message names the
     manifest path and the field at fault, never a Python exception text.
+    The document itself is returned so that the facts it states about the
+    archive can be checked against the archive.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -342,7 +351,87 @@ def _manifest_expectations(path: Path) -> tuple[str, str]:
             "followed by 64 hexadecimal characters"
         )
 
-    return sha256.lower(), digest
+    return sha256.lower(), digest, document
+
+
+def _same_value(declared: object, actual: object) -> bool:
+    """Equal in value and in type: ``True`` is not ``1``."""
+    if isinstance(declared, bool) != isinstance(actual, bool):
+        return False
+    return declared == actual
+
+
+def _manifest_differences(archive: Path, document: dict) -> list[str]:
+    """Compare the facts the manifest states about the archive with the archive.
+
+    CF-06 section 3 makes every field of the manifest a fact about the
+    archive, so a consumer that passes ``--manifest`` can read a green
+    result as "this archive is what the manifest describes". Each difference
+    is reported with the field, the value the manifest states and the value
+    the archive gives, and every difference is reported, not only the first
+    one.
+
+    The entries and the uncompressed bytes are counted by the code that
+    writes the manifest, so the two tools cannot disagree about them. The
+    protocols and the registry version come from the archive's own
+    ``registry.json``.
+    """
+    differences: list[str] = []
+    stated = document.get("archive")
+    if not isinstance(stated, dict):
+        stated = {}
+
+    try:
+        content = release_manifest.inspect_archive(archive)
+    except release_manifest.ManifestError as error:
+        return [f"the archive could not be read to check the manifest: {error}"]
+
+    registry: dict = {}
+    registry_bytes = content["files"].get(release_manifest.REGISTRY_NAME)
+    if registry_bytes is not None:
+        try:
+            decoded = json.loads(registry_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            decoded = None
+        if isinstance(decoded, dict):
+            registry = decoded
+
+    def compare(field: str, declared: object, actual: object) -> None:
+        if _same_value(declared, actual):
+            return
+        differences.append(
+            f"the manifest says {field} is {declared!r} but the archive gives {actual!r}"
+        )
+
+    compare("archive.file", stated.get("file"), archive.name)
+    compare("archive.bytes", stated.get("bytes"), archive.stat().st_size)
+    compare("archive.entries", stated.get("entries"), content["entries"])
+    compare(
+        "archive.uncompressedBytes",
+        stated.get("uncompressedBytes"),
+        content["uncompressed"],
+    )
+    version = release_manifest.archive_version(archive.name)
+    if version is None:
+        differences.append(
+            f"the archive file name {archive.name!r} carries no version, so the "
+            f"manifest's version {document.get('version')!r} cannot be confirmed"
+        )
+    else:
+        compare("version", document.get("version"), version)
+    compare("name", document.get("name"), release_manifest.NAME)
+    compare(
+        "manifestVersion",
+        document.get("manifestVersion"),
+        release_manifest.MANIFEST_VERSION,
+    )
+    protocol = registry.get("protocol")
+    if isinstance(protocol, int) and not isinstance(protocol, bool):
+        compare("protocols", document.get("protocols"), [protocol])
+    else:
+        compare("protocols", document.get("protocols"), None)
+    compare("registryVersion", document.get("registryVersion"), registry.get("registryVersion"))
+    return differences
 
 
 def _validate_pin(value: str) -> str:
@@ -393,8 +482,11 @@ def main(argv: list[str]) -> int:
     try:
         expected_sha = None if args.sha256 is None else _validate_pin(args.sha256)
         expected_digest = None
+        manifest_document = None
         if args.manifest is not None:
-            manifest_sha, expected_digest = _manifest_expectations(args.manifest)
+            manifest_sha, expected_digest, manifest_document = _manifest_expectations(
+                args.manifest
+            )
             if expected_sha is not None and expected_sha != manifest_sha:
                 print(
                     "error: --sha256 disagrees with the manifest; "
@@ -406,6 +498,8 @@ def main(argv: list[str]) -> int:
         result = verify_archive(
             args.archive, expected_sha256=expected_sha, expected_digest=expected_digest
         )
+        if result.ok and manifest_document is not None:
+            result.problems.extend(_manifest_differences(args.archive, manifest_document))
     except UnreadableArchive as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
