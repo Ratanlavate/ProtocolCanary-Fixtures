@@ -450,5 +450,152 @@ class ExtractAndSchemaGapTests(VerifyBase):
         self.assertEqual(caught.exception.code, 0)
 
 
+class UnusableInputTests(VerifyBase):
+    """Bad input is unusable input (exit 2), not a verification failure (exit 1).
+
+    A typo in a pinned hash must not look like a tampered download, and an
+    error must name the field at fault instead of a Python exception text.
+    """
+
+    def manifest_file(self, name: str, text: str) -> Path:
+        path = self.root / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_a_malformed_sha256_pin_is_unusable_input(self) -> None:
+        archive = self.valid_archive()
+        for value in (
+            "",
+            "xyz",
+            "c99ca009ed",
+            "sha256:" + "0" * 64,
+            "g" * 64,
+            "0" * 63,
+            "0" * 65,
+            "0" * 63 + "!",
+        ):
+            with self.subTest(value=value):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = verify.main(["--sha256", value, str(archive)])
+                self.assertEqual(code, 2)
+                self.assertIn("--sha256", err.getvalue())
+                # The mismatch path must not be reached.
+                self.assertNotIn("does not match", err.getvalue())
+                self.assertNotIn("Traceback", err.getvalue())
+
+    def test_a_sha256_pin_with_a_prefix_says_so(self) -> None:
+        archive = self.valid_archive()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = verify.main(["--sha256", "sha256:" + "0" * 64, str(archive)])
+        self.assertEqual(code, 2)
+        self.assertIn("prefix", err.getvalue())
+
+    def test_a_correct_format_but_wrong_hash_still_fails_verification(self) -> None:
+        archive = self.valid_archive()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = verify.main(["--sha256", "0" * 64, str(archive)])
+        self.assertEqual(code, 1)
+        self.assertIn("does not match", err.getvalue())
+
+    def test_an_upper_case_hash_is_accepted(self) -> None:
+        archive = self.valid_archive()
+        digest = verify.sha256_file(archive).upper()
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = verify.main(["--sha256", digest, str(archive)])
+        self.assertEqual(code, 0)
+
+    def test_a_malformed_manifest_is_unusable_input(self) -> None:
+        archive = self.valid_archive()
+        cases = (
+            ("empty.json", "", "empty"),
+            ("truncated.json", "{not json", "not valid JSON"),
+            ("array.json", "[1]", "JSON object"),
+            ("no-archive.json", "{}", "archive"),
+            ("archive-not-object.json", '{"archive": "x"}', "archive"),
+            ("no-sha.json", '{"archive": {}}', "archive.sha256"),
+            ("sha-not-a-string.json", '{"archive": {"sha256": 42}}', "archive.sha256"),
+            ("short-sha.json", '{"archive": {"sha256": "aa"}}', "archive.sha256"),
+            ("non-hex-sha.json", '{"archive": {"sha256": "' + "z" * 64 + '"}}', "archive.sha256"),
+            ("no-digest.json", '{"archive": {"sha256": "' + "0" * 64 + '"}}', "packDigest"),
+            (
+                "digest-not-a-string.json",
+                '{"archive": {"sha256": "' + "0" * 64 + '"}, "packDigest": 7}',
+                "packDigest",
+            ),
+            (
+                "digest-without-prefix.json",
+                '{"archive": {"sha256": "' + "0" * 64 + '"}, "packDigest": "' + "0" * 64 + '"}',
+                "packDigest",
+            ),
+            (
+                "digest-short.json",
+                '{"archive": {"sha256": "' + "0" * 64 + '"}, "packDigest": "sha256:abc"}',
+                "packDigest",
+            ),
+        )
+        for name, text, field in cases:
+            with self.subTest(name=name):
+                path = self.manifest_file(name, text)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = verify.main([str(archive), "--manifest", str(path)])
+                self.assertEqual(code, 2)
+                message = err.getvalue()
+                self.assertIn(field, message)
+                self.assertIn("cannot use manifest", message)
+                self.assertNotIn("Traceback", message)
+                self.assertNotIn("KeyError", message)
+
+    def test_a_manifest_that_does_not_exist_is_unusable_input(self) -> None:
+        archive = self.valid_archive()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = verify.main([str(archive), "--manifest", str(self.root / "absent.json")])
+        self.assertEqual(code, 2)
+        self.assertIn("cannot use manifest", err.getvalue())
+
+    def test_a_generated_manifest_still_verifies(self) -> None:
+        manifest = support.manifest
+        archive = self.valid_archive()
+        document = manifest.build_manifest(archive, revision=support.REVISION, engines=[])
+        path = self.manifest_file("generated.json", json.dumps(document))
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = verify.main([str(archive), "--manifest", str(path)])
+        self.assertEqual(code, 0)
+
+    def test_a_valid_manifest_with_a_wrong_checksum_fails_verification(self) -> None:
+        manifest = support.manifest
+        archive = self.valid_archive()
+        document = manifest.build_manifest(archive, revision=support.REVISION, engines=[])
+        document["archive"]["sha256"] = "0" * 64
+        path = self.manifest_file("wrong-checksum.json", json.dumps(document))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = verify.main([str(archive), "--manifest", str(path)])
+        self.assertEqual(code, 1)
+        self.assertIn("does not match", err.getvalue())
+
+    def test_a_valid_manifest_with_a_wrong_digest_fails_verification(self) -> None:
+        manifest = support.manifest
+        archive = self.valid_archive()
+        document = manifest.build_manifest(archive, revision=support.REVISION, engines=[])
+        document["packDigest"] = "sha256:" + "0" * 64
+        path = self.manifest_file("wrong-digest.json", json.dumps(document))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = verify.main([str(archive), "--manifest", str(path)])
+        self.assertEqual(code, 1)
+        self.assertIn("does not match", err.getvalue())
+
+    def test_the_help_text_states_the_exit_codes(self) -> None:
+        help_text = verify.build_parser().format_help()
+        self.assertIn("0 valid", help_text)
+        self.assertIn("1 verification failed", help_text)
+        self.assertIn("2 unusable input", help_text)
+
+
 if __name__ == "__main__":
     unittest.main()

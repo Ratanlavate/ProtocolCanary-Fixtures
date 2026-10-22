@@ -19,7 +19,8 @@ stopping at the first failure:
 
 The temporary directory is always removed, on success and on failure.
 
-Exit codes: 0 valid, 1 invalid, 2 the archive could not be read at all.
+Exit codes: 0 valid, 1 verification failed, 2 unusable input (a malformed
+``--sha256`` or ``--manifest``, or an archive that could not be read at all).
 
 Usage:
     python3 tools/pack/verify_archive.py ARCHIVE [--sha256 HEX] [--manifest PATH]
@@ -47,6 +48,19 @@ MAX_TOTAL_BYTES = 16 * 1024 * 1024
 MAX_FILE_BYTES = 1024 * 1024
 MAX_DEPTH = 8
 _SPECIAL_BITS = 0o7000
+
+_SHA256_LENGTH = 64
+_DIGEST_PREFIX = "sha256:"
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _is_sha256(value: object) -> bool:
+    """True for a SHA-256 value: 64 hexadecimal characters, in either case."""
+    return (
+        isinstance(value, str)
+        and len(value) == _SHA256_LENGTH
+        and all(character in _HEX_DIGITS for character in value)
+    )
 
 
 def _load(name: str, relative: str):
@@ -267,20 +281,104 @@ def verify_archive(
 
 
 def _manifest_expectations(path: Path) -> tuple[str, str]:
+    """Read the archive hash and the pack digest from a release manifest.
+
+    Every problem with the manifest is unusable input: the message names the
+    manifest path and the field at fault, never a Python exception text.
+    """
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-        return manifest["archive"]["sha256"], manifest["packDigest"]
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise UnreadableArchive(f"cannot use manifest {path}: {error}") from None
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise UnreadableArchive(
+            f"cannot use manifest {path}: {error.strerror or error}"
+        ) from None
+    except UnicodeDecodeError:
+        raise UnreadableArchive(
+            f"cannot use manifest {path}: the file is not valid UTF-8"
+        ) from None
+
+    if not text.strip():
+        raise UnreadableArchive(f"cannot use manifest {path}: the file is empty")
+
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise UnreadableArchive(
+            f"cannot use manifest {path}: the file is not valid JSON "
+            f"(line {error.lineno}, column {error.colno})"
+        ) from None
+
+    if not isinstance(document, dict):
+        raise UnreadableArchive(
+            f"cannot use manifest {path}: the manifest must be a JSON object"
+        )
+
+    archive = document.get("archive")
+    if not isinstance(archive, dict):
+        raise UnreadableArchive(
+            f"cannot use manifest {path}: archive must be a JSON object"
+        )
+
+    sha256 = archive.get("sha256")
+    if not isinstance(sha256, str):
+        raise UnreadableArchive(
+            f"cannot use manifest {path}: archive.sha256 must be a string"
+        )
+    if not _is_sha256(sha256):
+        raise UnreadableArchive(
+            f"cannot use manifest {path}: archive.sha256 must be 64 hexadecimal characters"
+        )
+
+    digest = document.get("packDigest")
+    if not isinstance(digest, str):
+        raise UnreadableArchive(
+            f"cannot use manifest {path}: packDigest must be a string"
+        )
+    if not digest.startswith(_DIGEST_PREFIX) or not _is_sha256(
+        digest[len(_DIGEST_PREFIX) :]
+    ):
+        raise UnreadableArchive(
+            f"cannot use manifest {path}: packDigest must be '{_DIGEST_PREFIX}' "
+            "followed by 64 hexadecimal characters"
+        )
+
+    return sha256.lower(), digest
+
+
+def _validate_pin(value: str) -> str:
+    """Check the ``--sha256`` argument before the archive is touched.
+
+    A pin that is not a SHA-256 value is unusable input, not a mismatch: a
+    typo in a pinned hash must not look like a tampered download. The value
+    itself is never echoed back.
+    """
+    if value.startswith(_DIGEST_PREFIX):
+        raise UnreadableArchive(
+            "--sha256 must be 64 hexadecimal characters "
+            f"(got {len(value)} characters); the '{_DIGEST_PREFIX}' prefix is not accepted"
+        )
+    if not _is_sha256(value):
+        raise UnreadableArchive(
+            f"--sha256 must be 64 hexadecimal characters (got {len(value)} characters)"
+        )
+    return value.lower()
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="verify_archive.py",
         description="Extract a fixture-pack archive safely and validate its contents (CF-06).",
+        epilog=(
+            "Exit codes: 0 valid, 1 verification failed, 2 unusable input "
+            "(a malformed --sha256 or --manifest, or an archive that cannot be read)."
+        ),
     )
     parser.add_argument("archive", type=Path, help="the .tar.gz to verify")
-    parser.add_argument("--sha256", metavar="HEX", help="expected SHA-256 of the archive")
+    parser.add_argument(
+        "--sha256",
+        metavar="HEX",
+        help="expected SHA-256 of the archive (64 hexadecimal characters)",
+    )
     parser.add_argument(
         "--manifest",
         type=Path,
@@ -292,12 +390,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
-    expected_sha = args.sha256
-    expected_digest = None
     try:
+        expected_sha = None if args.sha256 is None else _validate_pin(args.sha256)
+        expected_digest = None
         if args.manifest is not None:
             manifest_sha, expected_digest = _manifest_expectations(args.manifest)
-            if expected_sha is not None and expected_sha.lower() != manifest_sha:
+            if expected_sha is not None and expected_sha != manifest_sha:
                 print(
                     "error: --sha256 disagrees with the manifest; "
                     "an explicit pin wins and the manifest is not used to override it",

@@ -63,7 +63,7 @@ python3 tools/pack/verify_archive.py [--sha256 HEX] [--manifest PATH] archive
 ### Options
 
 - `-h`, `--help`: show this help message and exit
-- `--sha256 HEX`: expected SHA-256 of the archive
+- `--sha256 HEX`: expected SHA-256 of the archive (64 hexadecimal characters)
 - `--manifest PATH`: a release manifest whose archive hash and packDigest the archive must match
 
 ### Exit Codes
@@ -71,8 +71,8 @@ python3 tools/pack/verify_archive.py [--sha256 HEX] [--manifest PATH] archive
 | Exit Code | Meaning |
 |---|---|
 | `0` | Success: archive passes all extraction safety and validation checks, and matches expected SHA-256 / manifest if supplied. |
-| `1` | Archive verification error: archive hash mismatch, manifest mismatch, or archive contents violate pack limits/rules. |
-| `2` | Missing archive argument, unknown command-line option, archive file does not exist, or path is not a regular file. |
+| `1` | Archive verification error: archive hash mismatch, `--sha256` disagreeing with the manifest, manifest mismatch, or archive contents violate pack limits/rules. |
+| `2` | Unusable input: missing archive argument, unknown command-line option, a `--sha256` that is not 64 hexadecimal characters, a manifest that cannot be read or does not carry `archive.sha256` and `packDigest`, an archive file that does not exist, or a path that is not a regular file. |
 
 ### Output Streams
 
