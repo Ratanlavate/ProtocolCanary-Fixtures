@@ -37,6 +37,7 @@ _spec.loader.exec_module(diff)
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
+SHA_D = "d" * 64
 DIGEST_A = "sha256:" + "1" * 64
 DIGEST_B = "sha256:" + "2" * 64
 
@@ -89,7 +90,7 @@ class ComparisonTests(unittest.TestCase):
         self.new = registry(
             [
                 fixture("p28-a", "xdr/a.toml", SHA_A),
-                fixture("p28-c", "xdr/c2.toml", SHA_C),
+                fixture("p28-c", "xdr/c2.toml", SHA_D),
                 fixture("p28-d", "xdr/d.toml", SHA_B),
             ],
             digest=DIGEST_B,
@@ -108,9 +109,18 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual([entry["id"] for entry in self.diff["changed"]], ["p28-c"])
         changed = self.diff["changed"][0]
         self.assertEqual(changed["old_sha256"], SHA_C)
-        self.assertEqual(changed["new_sha256"], SHA_C)
+        self.assertEqual(changed["new_sha256"], SHA_D)
         self.assertEqual(changed["old_path"], "xdr/c.toml")
         self.assertEqual(changed["new_path"], "xdr/c2.toml")
+
+    def test_a_fixture_that_only_moved_is_reported_as_moved(self) -> None:
+        old = registry([fixture("p28-a", "xdr/a.toml", SHA_A)])
+        new = registry([fixture("p28-a", "xdr/moved/a.toml", SHA_A)])
+        result = diff.diff_registries(old, new)
+        self.assertEqual(result["changed"], [])
+        self.assertEqual([entry["id"] for entry in result["moved"]], ["p28-a"])
+        self.assertEqual(result["moved"][0]["old_path"], "xdr/a.toml")
+        self.assertEqual(result["moved"][0]["new_path"], "xdr/moved/a.toml")
 
     def test_an_unchanged_fixture_is_not_listed(self) -> None:
         listed = [entry["id"] for entry in self.diff["added"] + self.diff["removed"] + self.diff["changed"]]
@@ -123,6 +133,7 @@ class ComparisonTests(unittest.TestCase):
         result = diff.diff_registries(old, new)
         self.assertEqual(result["unchanged"], 3)
         self.assertEqual(result["added"], [])
+        self.assertEqual(result["moved"], [])
 
     def test_a_fixture_that_only_changed_content_is_changed(self) -> None:
         old = registry([fixture("p28-a", "xdr/a.toml", SHA_A)])
@@ -137,6 +148,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(result["added"], [])
         self.assertEqual(result["removed"], [])
         self.assertEqual(result["changed"], [])
+        self.assertEqual(result["moved"], [])
         self.assertEqual(result["unchanged"], 3)
 
 
@@ -236,6 +248,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertIn("added (1)", out)
         self.assertIn("removed (0)", out)
         self.assertIn("changed (1)", out)
+        self.assertIn("moved (0)", out)
         self.assertIn("p28-b", out)
         self.assertIn(SHA_A, out)
         self.assertIn(SHA_B, out)
@@ -247,6 +260,7 @@ class CommandLineTests(unittest.TestCase):
         document = json.loads(out)
         self.assertEqual([entry["id"] for entry in document["added"]], ["p28-b"])
         self.assertEqual([entry["id"] for entry in document["changed"]], ["p28-a"])
+        self.assertEqual(document["moved"], [])
         self.assertEqual(document["unchanged"], 0)
         self.assertEqual(document["old"]["packDigest"], DIGEST_A)
         self.assertEqual(document["new"]["packDigest"], DIGEST_B)

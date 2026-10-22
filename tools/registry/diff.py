@@ -10,7 +10,9 @@ know when the fixture it depends on changed.
 
 The tool compares two registry files and prints three sorted lists -- added,
 removed and changed -- keyed by fixture id, with the old and new file hash
-for a changed fixture and the pack digest of each registry. Nothing is
+for a changed fixture and the pack digest of each registry. A fixture whose
+content did not change but whose path did is reported separately, as moved,
+so that a changed fixture always carries two different hashes. Nothing is
 executed and no fixture is read: only the two registry files are opened.
 
 Both inputs are validated against ``schemas/registry-v1.schema.json`` before
@@ -148,8 +150,10 @@ def diff_registries(old: dict, new: dict) -> dict:
     The result holds three lists -- added, removed and changed -- keyed by
     fixture id and sorted by id, plus the number of unchanged fixtures. A
     fixture is *changed* when its id is in both registries but its file hash
-    or its path differs; a fixture that only moved keeps its hash and is
-    reported with both paths.
+    differs; the old and new hashes and the old and new path are reported.
+    A fixture whose content did not change but whose path did is *moved*,
+    and is reported separately so that a changed fixture always carries two
+    different hashes.
     """
     old_fixtures = _by_id(old)
     new_fixtures = _by_id(new)
@@ -157,6 +161,7 @@ def diff_registries(old: dict, new: dict) -> dict:
     added = []
     removed = []
     changed = []
+    moved = []
     unchanged = 0
 
     for identifier in sorted(set(old_fixtures) | set(new_fixtures), key=_utf8_key):
@@ -180,7 +185,7 @@ def diff_registries(old: dict, new: dict) -> dict:
                     "surface": before["surface"],
                 }
             )
-        elif before["sha256"] != after["sha256"] or before["path"] != after["path"]:
+        elif before["sha256"] != after["sha256"]:
             changed.append(
                 {
                     "id": identifier,
@@ -190,10 +195,25 @@ def diff_registries(old: dict, new: dict) -> dict:
                     "new_sha256": after["sha256"],
                 }
             )
+        elif before["path"] != after["path"]:
+            moved.append(
+                {
+                    "id": identifier,
+                    "old_path": before["path"],
+                    "new_path": after["path"],
+                    "sha256": after["sha256"],
+                }
+            )
         else:
             unchanged += 1
 
-    return {"added": added, "removed": removed, "changed": changed, "unchanged": unchanged}
+    return {
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "moved": moved,
+        "unchanged": unchanged,
+    }
 
 
 def _summary(path: Path, registry: dict) -> dict:
@@ -227,6 +247,12 @@ def render_text(diff: dict, old: dict, new: dict) -> str:
             f"sha256 {entry['old_sha256']} -> sha256 {entry['new_sha256']}"
             for entry in diff["changed"]
         )
+    lines.append(f"moved ({len(diff['moved'])}):")
+    if diff["moved"]:
+        lines.extend(
+            f"  {entry['id']}  {entry['old_path']} -> {entry['new_path']}"
+            for entry in diff["moved"]
+        )
     lines.append(f"unchanged ({diff['unchanged']})")
     return "\n".join(lines) + "\n"
 
@@ -239,6 +265,7 @@ def render_json(diff: dict, old: dict, new: dict) -> str:
         "added": diff["added"],
         "removed": diff["removed"],
         "changed": diff["changed"],
+        "moved": diff["moved"],
         "unchanged": diff["unchanged"],
     }
     return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
@@ -265,6 +292,13 @@ def render_markdown(diff: dict, old: dict, new: dict) -> str:
             f"- `{entry['id']}` — sha256 `{entry['old_sha256']}` -> "
             f"`{entry['new_sha256']}`"
             for entry in diff["changed"]
+        )
+        lines.append("")
+    if diff["moved"]:
+        lines.append("### Moved")
+        lines.extend(
+            f"- `{entry['id']}` — `{entry['old_path']}` -> `{entry['new_path']}`"
+            for entry in diff["moved"]
         )
         lines.append("")
     if not lines:

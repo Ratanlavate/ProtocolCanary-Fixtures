@@ -15,8 +15,9 @@ discussion and diff. New entries must include that link; see
 - `tools/registry/diff.py`: Compares two fixture registries and reports which fixtures were
   added, removed or changed — the same id with a different file hash — so a pack release can
   be described from the registry data instead of by hand from `git log`. The output is three
-  sorted lists keyed by fixture id, with the old and new file hash for a changed fixture and
-  the pack digest of each registry, in `text`, `json` or `markdown` (a CHANGELOG block) format.
+  sorted lists keyed by fixture id — added, removed and changed — with the old and new file hash
+  for a changed fixture, plus a separate list of fixtures that only moved, and the pack digest of
+  each registry, in `text`, `json` or `markdown` (a CHANGELOG block) format.
   Both inputs are validated against `schemas/registry-v1.schema.json` before they are compared,
   and the rules a schema cannot express — a duplicate fixture id, an empty fixtures list — are
   checked too. Comparing registries of different protocols is refused unless
