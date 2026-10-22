@@ -11,11 +11,12 @@ CI jobs, release workflows, and contributor scripts rely on these contracts. Any
 1. [`tools/pack/pack.py`](#toolspackpackpy)
 2. [`tools/pack/verify_archive.py`](#toolspackverify_archivepy)
 3. [`tools/registry/generate.py`](#toolsregistrygeneratepy)
-4. [`tools/release/manifest.py`](#toolsreleasemanifestpy)
-5. [`tools/badge/badge.py`](#toolsbadgebadgepy)
-6. [`tools/validate/validate.py`](#toolsvalidatevalidatepy)
-7. [`tools/validate/schema_sync.py`](#toolsvalidateschema_syncpy)
-8. [Observed Inconsistencies](#observed-inconsistencies)
+4. [`tools/registry/diff.py`](#toolsregistrydiffpy)
+5. [`tools/release/manifest.py`](#toolsreleasemanifestpy)
+6. [`tools/badge/badge.py`](#toolsbadgebadgepy)
+7. [`tools/validate/validate.py`](#toolsvalidatevalidatepy)
+8. [`tools/validate/schema_sync.py`](#toolsvalidateschema_syncpy)
+9. [Observed Inconsistencies](#observed-inconsistencies)
 
 ---
 
@@ -109,6 +110,36 @@ python3 tools/registry/generate.py [--output PATH | --stdout] pack
 
 - **stdout**: Serialized registry JSON document when `--stdout` is specified; help text when `--help` is invoked.
 - **stderr**: Error messages and validation diagnostics.
+
+---
+
+## `tools/registry/diff.py`
+
+Compares two fixture registries (`registry-v1.json`) and reports which fixtures were added, removed or changed, so that the release notes of a new pack release can be written from the registry data instead of by hand. Reads the two registry files only; never executes anything and never reads a fixture.
+
+### Synopsis
+
+```bash
+python3 tools/registry/diff.py [--format text|json|markdown] [--allow-protocol-mismatch] OLD NEW
+```
+
+### Options
+
+- `-h`, `--help`: show this help message and exit
+- `--format text|json|markdown`: output format (default: `text`)
+- `--allow-protocol-mismatch`: compare registries of different protocols instead of refusing
+
+### Exit Codes
+
+| Exit Code | Meaning |
+|---|---|
+| `0` | Success: the registries were compared. There may or may not be differences; a difference is not an error. |
+| `2` | Unusable input: a missing, unreadable or non-JSON file, a registry that does not conform to `schemas/registry-v1.schema.json`, a duplicate fixture id, an empty fixtures list, a protocol mismatch without `--allow-protocol-mismatch`, or a command-line syntax error. |
+
+### Output Streams
+
+- **stdout**: The report in the requested format; help text when `--help` is invoked.
+- **stderr**: Error messages.
 
 ---
 
