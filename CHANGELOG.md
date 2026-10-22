@@ -368,6 +368,18 @@ discussion and diff. New entries must include that link; see
 
 ### Changed
 
+- `tools/pack/verify_archive.py` now separates unusable input from a failed
+  verification. A `--sha256` that is not 64 hexadecimal characters (including a
+  `sha256:`-prefixed value), and a manifest that cannot be read or does not
+  carry `archive.sha256` (64 hexadecimal characters) and `packDigest`
+  (`sha256:` followed by 64 hexadecimal characters), exit 2 with a message
+  that names the manifest path and the field at fault, instead of being
+  compared with the archive's own hash or reported with a bare Python
+  exception text such as `'archive'`. Exit 1 is now used only for the real
+  outcomes: a hash mismatch, a digest mismatch, an unsafe archive or invalid
+  contents, and a `--sha256` that disagrees with the manifest. The `--help`
+  text and `docs/tools.md` state the three exit codes. ([PR #427])
+
 - `tools/validate/validate.py` and `schemas/fixture-v1.schema.json` now
   reject a soroban `[expect]` table containing a key other than `kind` or
   `message_contains`, a non-string `message_contains`, and an empty one.
@@ -576,3 +588,4 @@ discussion and diff. New entries must include that link; see
 [#354]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/354
 [PR #380]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/380
 [PR #381]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/381
+[PR #427]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/427
